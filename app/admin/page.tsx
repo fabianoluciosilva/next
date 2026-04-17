@@ -3,190 +3,205 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
-export default function AdminPll() {
+export default function AdminPllMaster() {
   const router = useRouter()
-  
-  // Estados de Filtro
+  const [abaAtiva, setAbaAtiva] = useState<'auditoria' | 'financeiro' | 'equipe'>('auditoria')
   const [mesFiltro, setMesFiltro] = useState(() => new Date().toISOString().slice(0, 7))
-  const [funcionarioId, setFuncionarioId] = useState('todos')
+  const [funcionarioFiltro, setFuncionarioFiltro] = useState('todos')
   
-  // Estados de Dados
+  // Dados
   const [viagens, setViagens] = useState<any[]>([])
-  const [listaFuncionarios, setListaFuncionarios] = useState<any[]>([])
+  const [extratoDepositos, setExtratoDepositos] = useState<any[]>([])
+  const [funcionarios, setFuncionarios] = useState<any[]>([])
   const [metricas, setMetricas] = useState({ depositos: 0, gastos: 0 })
   const [carregando, setCarregando] = useState(false)
 
-  const VERSAO_SISTEMA = "v2.1.2"
+  // Estados de Formulário
+  const [novoFunc, setNovoFunc] = useState({ nome: '', email: '', senha: '', is_admin: false })
+  const [deposito, setDeposito] = useState({ funcionario_id: '', valor: '' })
 
-  // Função para carregar os dados (Memoizada para evitar loops)
-  const carregarDados = useCallback(async () => {
+  const VERSAO_SISTEMA = "v2.2.0"
+
+  const carregarTudo = useCallback(async () => {
     setCarregando(true)
-    
-    // 1. Definir intervalo de datas para o mês selecionado
     const dataInicio = `${mesFiltro}-01`
     const dataFim = new Date(Number(mesFiltro.split('-')[0]), Number(mesFiltro.split('-')[1]), 0).toISOString().slice(0, 10)
 
-    // 2. Query de Gastos (Deslocamentos)
-    let queryGastos = supabase
-      .from('deslocamentos')
-      .select('*, funcionarios(nome, email)')
-      .gte('data', dataInicio)
-      .lte('data', dataFim)
+    // 1. Buscar Funcionários
+    const { data: fData } = await supabase.from('funcionarios').select('*').order('nome')
+    setFuncionarios(fData || [])
 
-    if (funcionarioId !== 'todos') {
-      queryGastos = queryGastos.eq('funcionario_id', funcionarioId)
-    }
+    // 2. Buscar Gastos (Auditoria)
+    let qG = supabase.from('deslocamentos').select('*, funcionarios(nome)').gte('data', dataInicio).lte('data', dataFim)
+    if (funcionarioFiltro !== 'todos') qG = qG.eq('funcionario_id', funcionarioFiltro)
+    const { data: dGastos } = await qG.order('data', { ascending: false })
 
-    const { data: dGastos, error: errG } = await queryGastos.order('data', { ascending: false })
+    // 3. Buscar Depósitos (Extrato)
+    let qD = supabase.from('depositos').select('*, funcionarios(nome)').gte('data', dataInicio).lte('data', dataFim)
+    if (funcionarioFiltro !== 'todos') qD = qD.eq('funcionario_id', funcionarioFiltro)
+    const { data: dCreditos } = await qD.order('data', { ascending: false })
 
-    // 3. Query de Depósitos
-    let queryCreditos = supabase
-      .from('depositos')
-      .select('valor_centavos')
-      .gte('data', dataInicio)
-      .lte('data', dataFim)
+    const totalG = (dGastos || []).reduce((acc, c) => acc + c.valor_centavos, 0)
+    const totalD = (dCreditos || []).reduce((acc, c) => acc + c.valor_centavos, 0)
 
-    if (funcionarioId !== 'todos') {
-      queryCreditos = queryCreditos.eq('funcionario_id', funcionarioId)
-    }
-
-    const { data: dCreditos, error: errC } = await queryCreditos
-
-    if (!errG && !errC) {
-      const totalGastos = (dGastos || []).reduce((acc, curr) => acc + curr.valor_centavos, 0)
-      const totalCreditos = (dCreditos || []).reduce((acc, curr) => acc + curr.valor_centavos, 0)
-
-      setViagens(dGastos || [])
-      setMetricas({ depositos: totalCreditos, gastos: totalGastos })
-    }
-    
+    setViagens(dGastos || [])
+    setExtratoDepositos(dCreditos || [])
+    setMetricas({ depositos: totalD, gastos: totalG })
     setCarregando(false)
-  }, [mesFiltro, funcionarioId])
+  }, [mesFiltro, funcionarioFiltro])
 
-  // Carregar lista de funcionários para o Select
-  useEffect(() => {
-    async function init() {
-      const { data } = await supabase.from('funcionarios').select('id, nome').order('nome')
-      setListaFuncionarios(data || [])
-    }
-    init()
-  }, [])
-
-  // Disparar busca sempre que um filtro mudar
-  useEffect(() => {
-    carregarDados()
-  }, [carregarDados])
+  useEffect(() => { carregarTudo() }, [carregarTudo])
 
   const formatarMoeda = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v / 100)
 
   return (
-    <div className="min-h-screen bg-slate-100 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* HEADER COM FILTROS */}
-        <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-            <div className="flex items-center gap-4">
-              <img src="/logo-pll.png" alt="PLL" className="h-8" />
-              <h1 className="text-sm font-black uppercase tracking-tighter text-slate-800 hidden sm:block">Filtros de Auditoria</h1>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              {/* Filtro de Funcionário */}
-              <select 
-                className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-black uppercase text-slate-600 outline-none focus:ring-2 focus:ring-blue-500"
-                value={funcionarioId}
-                onChange={e => setFuncionarioId(e.target.value)}
+        {/* HEADER E NAVEGAÇÃO */}
+        <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-6">
+          <img src="/logo-pll.png" alt="PLL" className="h-10" />
+          
+          <nav className="flex bg-slate-100 p-1.5 rounded-2xl">
+            {[
+              { id: 'auditoria', label: 'Auditoria' },
+              { id: 'financeiro', label: 'Financeiro' },
+              { id: 'equipe', label: 'Equipe' }
+            ].map((aba) => (
+              <button 
+                key={aba.id}
+                onClick={() => setAbaAtiva(aba.id as any)}
+                className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${abaAtiva === aba.id ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
               >
-                <option value="todos">Todos os Técnicos</option>
-                {listaFuncionarios.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-              </select>
-
-              {/* Filtro de Mês */}
-              <input 
-                type="month" 
-                className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-black uppercase text-blue-600 outline-none"
-                value={mesFiltro}
-                onChange={e => setMesFiltro(e.target.value)}
-              />
-
-              <button onClick={() => carregarDados()} className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-all">
-                🔄
+                {aba.label}
               </button>
-            </div>
+            ))}
+          </nav>
+
+          <div className="flex gap-2">
+            <input type="month" className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-[11px] font-black text-blue-600 outline-none" value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} />
+            <button onClick={() => { localStorage.clear(); router.push('/') }} className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase">Sair</button>
           </div>
         </div>
 
-        {/* DASHBOARD */}
+        {/* DASHBOARD DE SALDO */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Depósitos no Período</p>
-            <p className="text-3xl font-black text-slate-900">{carregando ? '...' : formatarMoeda(metricas.depositos)}</p>
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Créditos Lançados</p>
+            <p className="text-3xl font-black text-slate-900 mt-2">{formatarMoeda(metricas.depositos)}</p>
           </div>
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Gastos no Período</p>
-            <p className="text-3xl font-black text-red-600">{carregando ? '...' : formatarMoeda(metricas.gastos)}</p>
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gastos Reportados</p>
+            <p className="text-3xl font-black text-red-600 mt-2">{formatarMoeda(metricas.gastos)}</p>
           </div>
-          <div className={`p-8 rounded-[2.5rem] shadow-xl transition-colors ${metricas.depositos - metricas.gastos >= 0 ? 'bg-slate-900' : 'bg-red-900'}`}>
-            <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-1">Saldo Remanescente</p>
-            <p className="text-3xl font-black text-white">{carregando ? '...' : formatarMoeda(metricas.depositos - metricas.gastos)}</p>
+          <div className={`p-8 rounded-[2.5rem] shadow-xl ${metricas.depositos - metricas.gastos >= 0 ? 'bg-slate-900' : 'bg-red-900'}`}>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Saldo em Conta</p>
+            <p className="text-3xl font-black text-white mt-2">{formatarMoeda(metricas.depositos - metricas.gastos)}</p>
           </div>
         </div>
 
-        {/* TABELA DE RESULTADOS */}
-        <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
-          <div className="overflow-x-auto">
+        {/* CONTEÚDO DAS ABAS */}
+        
+        {abaAtiva === 'auditoria' && (
+          <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden animate-in fade-in">
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+              <h3 className="text-xs font-black uppercase text-slate-500">Relatório de Viagens</h3>
+              <select className="bg-white border border-slate-200 rounded-lg px-3 py-1 text-[10px] font-black uppercase outline-none" value={funcionarioFiltro} onChange={e => setFuncionarioFiltro(e.target.value)}>
+                <option value="todos">Todos os Funcionários</option>
+                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+              </select>
+            </div>
             <table className="w-full text-left">
-              <thead className="bg-slate-50 text-[9px] font-black text-slate-400 uppercase border-b border-slate-100">
-                <tr>
-                  <th className="px-6 py-5">Data</th>
-                  <th className="px-6 py-5">Colaborador</th>
-                  <th className="px-6 py-5">Destino</th>
-                  <th className="px-6 py-5 text-right">Valor</th>
-                  <th className="px-6 py-5 text-center">Ações</th>
-                </tr>
+              <thead className="bg-slate-50 text-[9px] font-black text-slate-400 uppercase">
+                <tr><th className="px-6 py-4">Data</th><th className="px-6 py-4">Nome</th><th className="px-6 py-4">Local</th><th className="px-6 py-4 text-right">Total</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {viagens.map(v => (
-                  <tr key={v.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-6 py-4 text-[11px] font-bold text-slate-500">
-                      {new Date(v.data).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}
-                    </td>
-                    <td className="px-6 py-4">
-                      <p className="text-[11px] font-black text-slate-900 uppercase">{v.funcionarios?.nome}</p>
-                      <p className="text-[9px] text-slate-400">{v.funcionarios?.email}</p>
-                    </td>
-                    <td className="px-6 py-4 text-[11px] font-bold text-slate-600 uppercase italic">
-                      {v.local_destino}
-                    </td>
-                    <td className="px-6 py-4 text-[12px] font-black text-slate-900 text-right">
-                      {formatarMoeda(v.valor_centavos)}
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      {v.comprovante_urls && (
-                        <a 
-                          href={v.comprovante_urls[0]} 
-                          target="_blank" 
-                          className="text-[9px] font-black bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-600 hover:text-white transition-all uppercase tracking-widest"
-                        >
-                          Recibo
-                        </a>
-                      )}
-                    </td>
+                  <tr key={v.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 text-[11px] font-bold">{new Date(v.data).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
+                    <td className="px-6 py-4 text-[11px] font-black uppercase text-slate-800">{v.funcionarios?.nome}</td>
+                    <td className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase italic">{v.local_destino}</td>
+                    <td className="px-6 py-4 text-[11px] font-black text-right">R$ {(v.valor_centavos/100).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {viagens.length === 0 && !carregando && (
-              <div className="p-20 text-center">
-                <p className="text-xs font-black text-slate-300 uppercase tracking-widest italic">Nenhum registro para este filtro</p>
-              </div>
-            )}
           </div>
-        </div>
+        )}
 
-        <div className="flex justify-center py-4">
-           <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.4em]">PLL NEXT ADMIN — {VERSAO_SISTEMA}</p>
+        {abaAtiva === 'financeiro' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in slide-in-from-bottom-4">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 h-fit">
+              <h3 className="text-xs font-black uppercase text-slate-800 mb-6">Informar Novo Depósito</h3>
+              <form onSubmit={async (e) => {
+                e.preventDefault()
+                const { error } = await supabase.from('depositos').insert({
+                  funcionario_id: deposito.funcionario_id,
+                  valor_centavos: Math.round(Number(deposito.valor) * 100),
+                  data: new Date().toISOString().slice(0, 10)
+                })
+                if (!error) { alert('Depósito ok!'); setDeposito({ funcionario_id: '', valor: '' }); carregarTudo(); }
+              }} className="space-y-4">
+                <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs font-bold" value={deposito.funcionario_id} onChange={e => setDeposito({...deposito, funcionario_id: e.target.value})}>
+                  <option value="">Selecione o Técnico</option>
+                  {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                </select>
+                <input type="number" step="0.01" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-black" placeholder="Valor R$" value={deposito.valor} onChange={e => setDeposito({...deposito, valor: e.target.value})} />
+                <button className="w-full bg-green-600 text-white py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest">Confirmar Crédito</button>
+              </form>
+            </div>
+
+            <div className="lg:col-span-2 bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden">
+              <div className="p-6 bg-slate-50/50 border-b border-slate-100"><h3 className="text-xs font-black uppercase text-slate-500">Extrato de Depósitos Efetuados</h3></div>
+              <table className="w-full text-left">
+                <thead className="bg-slate-50 text-[9px] font-black text-slate-400 uppercase">
+                  <tr><th className="px-6 py-4">Data</th><th className="px-6 py-4">Destinatário</th><th className="px-6 py-4 text-right">Valor</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {extratoDepositos.map(d => (
+                    <tr key={d.id} className="hover:bg-green-50/30 transition-colors">
+                      <td className="px-6 py-4 text-[11px] font-bold">{new Date(d.data).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}</td>
+                      <td className="px-6 py-4 text-[11px] font-black uppercase">{d.funcionarios?.nome}</td>
+                      <td className="px-6 py-4 text-[11px] font-black text-right text-green-600">{formatarMoeda(d.valor_centavos)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {abaAtiva === 'equipe' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200">
+              <h3 className="text-xs font-black uppercase text-slate-800 mb-6">Cadastrar Colaborador</h3>
+              <form onSubmit={async (e) => {
+                e.preventDefault()
+                const { error } = await supabase.from('funcionarios').insert([novoFunc])
+                if (!error) { alert('Cadastrado!'); setNovoFunc({ nome: '', email: '', senha: '', is_admin: false }); carregarTudo(); }
+              }} className="space-y-4">
+                <input required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold" placeholder="Nome" value={novoFunc.nome} onChange={e => setNovoFunc({...novoFunc, nome: e.target.value})} />
+                <input required type="email" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold" placeholder="E-mail" value={novoFunc.email} onChange={e => setNovoFunc({...novoFunc, email: e.target.value})} />
+                <input required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold" placeholder="Senha" value={novoFunc.senha} onChange={e => setNovoFunc({...novoFunc, senha: e.target.value})} />
+                <div className="flex items-center gap-2"><input type="checkbox" checked={novoFunc.is_admin} onChange={e => setNovoFunc({...novoFunc, is_admin: e.target.checked})} /><label className="text-[10px] font-black uppercase text-slate-400">Administrador</label></div>
+                <button className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest">Salvar Cadastro</button>
+              </form>
+            </div>
+            
+            <div className="space-y-4">
+              {funcionarios.map(f => (
+                <div key={f.id} className="bg-white p-6 rounded-3xl border border-slate-200 flex justify-between items-center hover:border-blue-300 transition-all">
+                  <div><p className="text-xs font-black uppercase text-slate-800">{f.nome}</p><p className="text-[10px] font-bold text-slate-400">{f.email}</p></div>
+                  <span className={`text-[8px] font-black uppercase px-3 py-1 rounded-full ${f.is_admin ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>{f.is_admin ? 'Admin' : 'Técnico'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FOOTER */}
+        <div className="text-center py-6">
+          <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.4em]">PLL NEXT — {VERSAO_SISTEMA}</p>
         </div>
       </div>
     </div>
