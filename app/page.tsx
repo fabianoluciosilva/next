@@ -54,7 +54,15 @@ export default function Login() {
           </div>
           <h2 className="text-3xl font-black tracking-tighter uppercase text-white">Portal SSTI</h2>
         </div>
-
+// Dentro do return do Login
+<title>Sistema de Deslocamentos - PLL Next</title>
+// ...
+<div className="text-center mb-10">
+  <img src="/logo-pll.png" alt="PLL Next" className="w-32 mx-auto mb-4" />
+  <h2 className="text-2xl font-black uppercase dark:text-white">PLL Next</h2>
+  <p className="text-slate-400 text-xs font-bold tracking-widest">SISTEMA DE DESLOCAMENTOS</p>
+</div>
+        
         <form onSubmit={handleLogin} className="space-y-6">
           <input 
             type="email" required 
